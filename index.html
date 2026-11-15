@@ -5952,8 +5952,10 @@ var R = (function () {
   // Levers. 'grab': squeeze the grip to take hold of a lever, push your hand forward to open it, pull back to close,
   // let go and it stays put (the drag scheme, with your arms). Full range is about 30 cm of travel, the last bit is overdrive.
   // 'triggers': each trigger is a lever; with it held fully, squeeze the grip for overdrive.
-  var vrLev = [0, 0], vrHold = [null, null], GRAB_TRAVEL = 0.24;
-  function vrLevers(mode) {
+  var vrLev = [0, 0], vrHold = [null, null];
+  function vrLevers(mode, reach) {
+    // travel per lever unit: Comfort = 20 cm from idle to the top of overdrive (16 cm to full power), Tall = 25 cm
+    var GRAB_TRAVEL = (reach === 'tall' ? 0.25 : 0.20) / LEVER_MAX;
     if (!xrSession) return null;
     var lev = [0, 0], got = 0;
     var srcs = xrSession.inputSources;
@@ -5980,6 +5982,27 @@ var R = (function () {
     }
     return got ? lev : null;
   }
+  // the face buttons and stick clicks, by name (xr-standard mapping: 3 stick click, 4 A/X, 5 B/Y)
+  function vrButtons() {
+    var o = { a: false, b: false, x: false, y: false, ls: false, rs: false };
+    if (!xrSession) return o;
+    var srcs = xrSession.inputSources;
+    for (var i = 0; i < srcs.length; i++) {
+      var s = srcs[i], bt = s.gamepad && s.gamepad.buttons;
+      if (!bt) continue;
+      var pr = function (k) { return !!(bt[k] && bt[k].pressed); };
+      if (s.handedness === 'right') { o.a = pr(4); o.b = pr(5); o.rs = pr(3); }
+      if (s.handedness === 'left') { o.x = pr(4); o.y = pr(5); o.ls = pr(3); }
+    }
+    return o;
+  }
+  // the dash sits low when racing; paused, it comes up in front of you as the menu
+  function vrHudPose(menu) {
+    if (!vrHud) return;
+    var m = vrHud.mesh;
+    if (menu) { m.position.set(0, -0.18, -0.85); m.rotation.x = -0.15; m.scale.setScalar(1.25); }
+    else { m.position.set(0, -0.58, -0.95); m.rotation.x = -0.6; m.scale.setScalar(1); }
+  }
   function vrPulse(intensity, ms, side) {
     if (!xrSession) return;
     var srcs = xrSession.inputSources;
@@ -5994,6 +6017,7 @@ var R = (function () {
 
   return {
     info: function () { return renderer.info.render; }, setFlurry: setFlurry, setFlash: setFlash, updateDrops: updateDrops, updateSerpents: updateSerpents, setCockpit: function (f, fins) { cockpit = f; finsHidden = !!fins; }, setDarkness: setDarkness, updateBombs: updateBombs, init: init, resize: resize, setPixelMode: setPixelMode, setGraphics: setGraphics, updateStreaks: updateStreaks, enhanced: function () { return GFX.enhanced; }, buildStage: buildStage, setupCrafts: setupCrafts, removeCrafts: removeCrafts,
+    vrButtons: vrButtons, vrHudPose: vrHudPose,
     vrResetLevers: function () { vrLev = [0, 0]; vrHold = [null, null]; }, vrHolding: function () { return [!!vrHold[0], !!vrHold[1]]; },
     xrCheck: xrCheck, enterVR: enterVR, exitVR: exitVR, inVR: function () { return xrOn; }, vrFollow: vrFollow, vrLevers: vrLevers, vrPulse: vrPulse,
     vrHud: function () { return vrHud; }, vrFadeOut: function (a) { vrState.fade = Math.max(vrState.fade, a); },
@@ -6154,7 +6178,7 @@ var SFX = (function () {
   function fmtT(t) { if (!isFinite(t) || t > 1e8) return 'DNF'; var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
   function ord(n) { return n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'); }
 
-  var settings = Object.assign({ lever: 'absolute', reach: 'comfort', pixel: 'chunky', cam: 'chase', sound: 'on', gfx: 'enhanced', vrMotion: 'calm', vrView: 'pod', vrLevers: 'grab' }, load('twinburn.settings') || {});
+  var settings = Object.assign({ lever: 'absolute', reach: 'comfort', pixel: 'chunky', cam: 'chase', sound: 'on', gfx: 'enhanced', vrMotion: 'calm', vrView: 'pod', vrLevers: 'grab', vrReach: 'comfort' }, load('twinburn.settings') || {});
   if (settings.lever !== 'relative') settings.lever = 'absolute';
   var best = Object.assign({ runs: 0, wins: 0, furthest: 0 }, load('twinburn.best') || {});
   var run = null;
@@ -6238,7 +6262,7 @@ var SFX = (function () {
     return null;
   }
   function currentLevers() {
-    if (R.inVR()) { var vl = R.vrLevers(settings.vrLevers); return vl || [0, 0]; }
+    if (R.inVR()) { var vl = R.vrLevers(settings.vrLevers, settings.vrReach); return vl || [0, 0]; }
     var pad = padLevers();
     if (Input.src === 'pad' && pad) return pad;
     if (Input.src === 'keys') return keyLevers();
@@ -6555,7 +6579,7 @@ var SFX = (function () {
     show('panel');
     panelHandler = function (act) {
       if (act === 'race') startRace(node);
-      if (act === 'racevr') goVR(function () { R.vrResetLevers(); startRace(node); G.vrSnap = true; });
+      if (act === 'racevr') goVR(function () { R.vrResetLevers(); R.vrHudPose(false); G.vrPause = false; startRace(node); G.vrSnap = true; });
       if (act === 'bribe' && G.grid > 1 && run.credits >= bribeCost) { run.credits -= bribeCost; G.grid = 1; G.bribed = true; if (bribeCost) SFX.buy(); showStageCard(node); }
       if (act === 'back') { if (G.practice) showPractice(); else { G.mode = 'map'; showMap(); } }
     };
@@ -6837,7 +6861,46 @@ var SFX = (function () {
     // back on the flat screen: restart the page's own loop; mid-race, pause so you can carry on either way
     last = performance.now();
     if (!G.rafPending) { G.rafPending = true; requestAnimationFrame(frame); }
-    if (G.mode === 'race' && G.race && G.race.phase !== 'done' && !G.paused) showPause();
+    var wasMenu = G.vrPause; G.vrPause = false;
+    if (G.mode === 'race' && G.race && G.race.phase !== 'done' && (!G.paused || wasMenu)) showPause();
+  }
+  // in VR: B or Y pauses. Paused: A resumes, B leaves VR (menus and all settings, race stays paused),
+  // X and Y switch motion and view, the stick clicks switch lever style and reach
+  var VR_CYCLE = { vrMotion: ['calm', 'full'], vrView: ['pod', 'chase'], vrLevers: ['grab', 'triggers'], vrReach: ['comfort', 'tall'] };
+  function vrInput() {
+    var b = R.vrButtons(), pb = G.vrPrevBtn || {}, edge = function (k) { return b[k] && !pb[k]; };
+    G.vrPrevBtn = b;
+    if (G.mode !== 'race' || !G.race || G.race.phase === 'done') return;
+    var flip = function (k) { var o = VR_CYCLE[k]; settings[k] = o[(o.indexOf(settings[k]) + 1) % o.length]; save('twinburn.settings', settings); R.vrPulse(0.3, 30); G.vrHudT = 0; };
+    if (!G.paused) {
+      if (edge('b') || edge('y')) { G.paused = true; G.vrPause = true; R.vrPulse(0.4, 40); R.vrHudPose(true); G.vrHudT = 0; }
+      return;
+    }
+    if (!G.vrPause) return;
+    if (edge('a')) { G.paused = false; G.vrPause = false; R.vrHudPose(false); R.vrPulse(0.4, 40); G.vrSnap = true; G.vrHudT = 0; return; }
+    if (edge('b')) { R.exitVR(); return; }
+    if (edge('x')) flip('vrMotion');
+    if (edge('y')) flip('vrView');
+    if (edge('ls')) flip('vrLevers');
+    if (edge('rs')) flip('vrReach');
+  }
+  function drawVRMenu(race) {
+    var V = R.vrHud(); if (!V) return;
+    var c = V.ctx, W = V.canvas.width, H = V.canvas.height;
+    c.clearRect(0, 0, W, H);
+    c.fillStyle = 'rgba(10,8,14,0.9)'; c.fillRect(0, 0, W, H);
+    c.strokeStyle = '#ffc23d'; c.lineWidth = 3; c.strokeRect(2, 2, W - 4, H - 4);
+    c.textAlign = 'left'; c.fillStyle = '#ffc23d'; c.font = 'bold 44px monospace'; c.fillText('PAUSED', 30, 58);
+    c.fillStyle = 'rgba(242,234,216,0.7)'; c.font = '20px monospace'; c.fillText(race.stage.name, 250, 56);
+    var lab = { calm: 'Calm', full: 'Full motion', pod: 'Cockpit', chase: 'Chase', grab: 'Grab & push', triggers: 'Triggers', comfort: 'Comfort 20 cm', tall: 'Tall 25 cm' };
+    var rows = [['A', 'Resume', ''], ['B', 'Leave VR', 'menus & all settings'], ['X', 'Motion', lab[settings.vrMotion]], ['Y', 'View', lab[settings.vrView]], ['L stick click', 'Levers', lab[settings.vrLevers]], ['R stick click', 'Reach', lab[settings.vrReach]]];
+    rows.forEach(function (r, i) {
+      var y = 108 + i * 44;
+      c.fillStyle = '#49d6ff'; c.font = 'bold 24px monospace'; c.fillText(r[0], 30, y);
+      c.fillStyle = '#f2ead8'; c.font = 'bold 26px monospace'; c.fillText(r[1], 230, y);
+      c.fillStyle = '#ffc23d'; c.font = '24px monospace'; c.fillText(r[2], 420, y);
+    });
+    V.tex.needsUpdate = true;
   }
   function vrCallout(big, sub, color) { G.vrCall = { big: big || '', sub: sub || '', color: color || '#f2ead8', t: performance.now() }; }
   var VRCOL = { 'var(--danger)': '#ff4a3a', 'var(--ok)': '#7cff7a', 'var(--gold)': '#ffc23d', 'var(--plasma)': '#49d6ff', 'var(--heat)': '#ff8a3a', 'var(--bone)': '#f2ead8' };
@@ -7237,6 +7300,7 @@ var SFX = (function () {
       '</div><div class="mgroup"><div class="label">VR (Quest)</div>' +
       row('VR motion', seg('vrMotion', [['calm', 'Calm'], ['full', 'Full motion']]), settings.vrMotion === 'calm' ? 'The view follows the track, not the pod: level horizon, no shake, eased bumps. Easiest on the stomach.' : 'The view turns, pitches and rolls with the pod, with shake on hits. Most intense.') +
       row('VR view', seg('vrView', [['pod', 'Cockpit'], ['chase', 'Chase']])) +
+      row('VR reach', seg('vrReach', [['comfort', 'Comfort'], ['tall', 'Tall']]), settings.vrReach === 'tall' ? 'Grab levers: 25 cm of hand travel from idle to the top of overdrive.' : 'Grab levers: 20 cm of hand travel from idle to the top of overdrive.') +
       row('VR levers', seg('vrLevers', [['grab', 'Grab & push'], ['triggers', 'Triggers']]), settings.vrLevers === 'triggers' ? 'Each trigger is a lever. With a trigger held fully, squeeze the grip as well for overdrive.' : 'Squeeze a grip to take hold of that lever, push your hand forward to open it and pull back to close it. Let go and it stays where it is. Push past the top for overdrive.') +
       '</div>';
   }
@@ -7271,7 +7335,7 @@ var SFX = (function () {
     panelHandler = function (act) {
       if (act.indexOf('set:') === 0) { var a = act.split(':'); settings[a[1]] = a[2]; applySettings(); render(false); return; }
       if (act === 'fs') { toggleFs(); return; }
-      if (act === 'resumevr') { goVR(function () { show('hud'); G.paused = false; G.vrSnap = true; }); return; }
+      if (act === 'resumevr') { goVR(function () { show('hud'); G.paused = false; G.vrPause = false; R.vrHudPose(false); G.vrSnap = true; }); return; }
       if (act === 'resume') { if (inRace) { show('hud'); G.paused = false; requestAnimationFrame(cacheRects); } else if (fromMap && run) showMap(); else showTitle(); return; }
       if (act === 'quitprac') { G.paused = false; G.race = null; R.removeCrafts(); SFX.engines([0, 0], [0, 0], [0, 0], 0, [0, 0], false); SFX.rival(999, 0, 0, false); return showPractice(); }
       if (act === 'abandon') return render(true);
@@ -7347,10 +7411,11 @@ var SFX = (function () {
       handleEvents(race);
       drawRace(race, dt);
       updateHud(race, dt);
-      if (R.inVR()) { G.vrHudT = (G.vrHudT || 0) - dt; if (G.vrHudT <= 0) { G.vrHudT = 1 / 15; drawVRHud(race); } }
+      if (R.inVR()) { vrInput(); G.vrHudT = (G.vrHudT || 0) - dt; if (G.vrHudT <= 0) { G.vrHudT = 1 / 15; drawVRHud(race); } }
       if (race.phase === 'done') { G.doneT += dt; if (G.doneT > 3.2) { G.race = null; G.post = race; G.postT = 0; if (R.inVR()) R.exitVR(); finishRace(race); } }
     } else if (G.mode === 'race' && race && G.paused) {
       drawRace(race, 0);
+      if (R.inVR()) { vrInput(); G.vrHudT = (G.vrHudT || 0) - dt; if (G.vrHudT <= 0) { G.vrHudT = 1 / 10; if (G.vrPause) drawVRMenu(race); else drawVRHud(race); } }
     } else if (G.post && G.post.stage === G.stage && !G.paused) {
       // after the flag: everyone rolls down the pit lane into the hangar while the results are up
       var PR = G.post;
